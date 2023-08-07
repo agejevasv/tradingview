@@ -1,0 +1,625 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © RunStrat
+
+//@version=5
+indicator("RS: Market Profile", shorttitle = "RS: MP", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+G_POC_LABEL_IDX         = 0
+G_VP_POC_LABEL_IDX      = 1
+P_SESSION_OPEN          = 0
+P_SESSION_CLOSE         = 1
+P_IB_LOW                = 2
+P_IB_HIGH               = 3 
+TPO_CHARS               = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+TPO_SQUARE              = "◼"
+TPO_CIRCLE              = "⬤"
+TPO_AZ                  = "A-Za-z"
+TF_DAILY                = "Daily"
+TF_WEEKLY               = "Weekly"
+TF_MONTHLY              = "Monthly"
+TF_FIXED                = "Fixed"
+MP_HL                   = "High/Low mid"
+MP_TPOS                 = "Number of TPOs"
+MAX_BARS_BACK           = 5000
+EXCHANGE                = "Exchange"
+
+ticks_input                      = input.float(defval = 10, title = "Ticks per letter", minval = 1, tooltip = "Experiment with this value to match your instrument's price")
+show_vp_based_poc_input          = input.bool(defval = true, title = "Highlight POC based on VP?", tooltip = "Has a limitation how far into the past it is calculated")
+value_area_based_on_vp_input     = input.bool(defval = true, title = "Use VP POC for Value Area?", tooltip = "Works only if VP POC is selected and is calculated")
+show_session_vwap_input          = input.bool(defval = false, title = "Highlight session VWAP?")
+show_extension_lines_input       = input.bool(defval = false, title = "Show extension lines?")
+split_profile_input              = input.bool(defval = false, title = "Split MP?", tooltip = "Applicable only if 'A-Za-z' is selected for rendering")
+
+timeframe_input                  = input.string(defval = TF_DAILY, title = "Timeframe", options = [TF_DAILY, TF_WEEKLY, TF_MONTHLY, TF_FIXED], group = "Time")
+timezone_input                   = input.string(defval = EXCHANGE, title = "Timezone", options = [
+                                     EXCHANGE, "UTC-10", "UTC-9", "UTC-8", "UTC-7", "UTC-6", "UTC-5", "UTC-4", "UTC-3", "UTC-2", "UTC-1", "UTC", "UTC+1", 
+                                     "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+6", "UTC+7", "UTC+8", "UTC+9", "UTC+10", "UTC+11", "UTC+12", "UTC+13"
+                                   ], group = "Time")
+session_range_input              = input.session(defval = "0830-1500", title = "Daily session", tooltip = "Applicable only if 'Daily' market profile timeframe is selected", group = "Time")
+time_range_from_input            = input.time(timestamp("03 Jan 2023 8:30 -0600"), "",  inline = "fixed", group = "Fixed range")
+time_range_till_input            = input.time(timestamp("03 Jan 2023 15:00 -0600"), "", inline = "fixed", group = "Fixed range")
+render_volumes_input             = input.bool(defval = true, title = "Render volume numbers?", tooltip = "Applicable only if 'Fixed' market profile timeframe is selected")
+
+tpo_characters_input             = input.string(defval = TPO_SQUARE, title = "TPO characters", options = [TPO_SQUARE, TPO_CIRCLE, TPO_AZ], group = "Rendering")
+va_percent_input                 = input.int(defval = 70, title = "Value Area Percent", minval = 0, maxval = 100, group = "Rendering")
+ib_periods_input                 = input.int(defval = 2, title = "IB periods", minval = 1, group = "Rendering")
+ib_width_input                   = input.int(defval = 2, title = "IB line width", minval = 1, maxval = 3, group = "Rendering")
+price_marker_width_input         = input.int(defval = 2, title = "Price marker width", minval = 1, maxval = 5, group = "Rendering")
+price_marker_length_input        = input.int(defval = 1, title = "Price marker length", minval = 1, maxval = 5, group = "Rendering")
+text_size_input                  = input.string(defval = "Normal", title = "Font size", options = ["Tiny", "Small", "Normal"], group = "Rendering")
+mark_period_opens_input          = input.string(defval = "No", title = "Mark period open?", options = ["No", "Swap case", "Use '0'"], tooltip = "Applicable only if 'A-Za-z' is selected for rendering", group = "Rendering")
+midpoint_algo_input              = input.string(defval = MP_HL, title = "Midpoint algo", options = [MP_HL, MP_TPOS], group = "Rendering")
+
+default_tpo_color_input          = input.color(defval = color.new(color.gray, 10), title = "Default", group = "Colors")
+single_print_color_input         = input.color(defval = color.new(#d56a6a, 0)  , title = "Single Print", group = "Colors")
+value_area_color_input           = input.color(defval = color.new(color.white, 20) , title = "Value Area", group = "Colors")
+poc_color_input                  = input.color(defval = color.new(#3f7cff, 0) , title = "POC", group = "Colors")
+vp_poc_color_input               = input.color(defval = color.new(#87c74c, 0) , title = "VP POC", group = "Colors")
+open_color_input                 = input.color(defval = color.rgb(110, 173, 255), title = "Open", group = "Colors")
+close_color_input                = input.color(defval = color.red , title = "Close", group = "Colors")
+ib_highlight_color_input         = input.color(defval = color.rgb(110, 173, 255), title = "IB", group = "Colors")
+ib_background_color_input        = input.color(defval = color.rgb(96, 109, 121), title = "IB background", group = "Colors")
+session_vwap_color_input         = input.color(defval = color.rgb(255, 153, 37), title = "Session VWAP", group = "Colors")
+poc_ext_color_input              = input.color(defval = color.new(#87c74c, 50), title = "POC extension", group = "Colors")
+vah_ext_color_input              = input.color(defval = color.new(color.white, 70), title = "VAH extension ", group = "Colors")
+val_ext_color_input              = input.color(defval = color.new(color.white, 70), title = "VAL extension", group = "Colors")
+high_color_input                 = input.color(defval = color.new(color.red, 100), title = "High extension", group = "Colors")
+low_color_input                  = input.color(defval = color.new(color.green, 100), title = "Low extension", group = "Colors")
+mid_color_input                  = input.color(defval = color.new(#7649ff, 100), title = "Midpoint extension", group = "Colors")
+fixed_range_bg_color_input       = input.color(defval = color.new(#3179f5, 80), title = "Fixed range background", group = "Colors")
+
+var label [] vp_labels         = array.new_label()
+var string [] tpo_chars        = array.new_string()
+var label [] tpo_labels        = array.new_label()
+var label [] tpo_oc_labels     = array.new_label()
+var line [] lines              = array.new_line()
+var line [] extensions         = array.new_line()
+var line [] ext_cache          = array.new_line()
+var float [] tpo_highs         = array.new_float()
+var float [] tpo_lows          = array.new_float()
+var float [] opens             = array.new_float(1440)
+var int [] globals             = array.from(na, na, 0)
+var float [] prices            = array.from(0.0, 0.0, 0.0, 0.0)
+var float max                  = na
+var float min                  = na
+var int first_bar_index        = na
+var float [] lower_tf_highs    = array.new_float()
+var float [] lower_tf_lows     = array.new_float()
+var float [] lower_tf_volumes  = array.new_float()
+var float [] vp_volumes        = array.new_float()
+var float [] vp_prices         = array.new_float()
+var label [] last_label        = array.new_label()
+
+max_bars_back(time, MAX_BARS_BACK - 1)
+
+tz = timezone_input == EXCHANGE ? syminfo.timezone : timezone_input
+session_time = time(timeframe.period, '24x7', tz)
+
+if timeframe_input == TF_DAILY
+    session_time := time(timeframe.period, session_range_input, tz)
+
+vwap_reset = switch timeframe_input
+    TF_DAILY =>
+        not(session_time)
+    TF_WEEKLY   =>
+        weekofyear[1] != weekofyear
+    TF_MONTHLY  =>
+        month[1] != month
+    TF_FIXED =>
+        time >= time_range_from_input and time[1] < time_range_from_input
+
+session_vwap = ta.vwap(hlc3, vwap_reset)
+
+font_size = switch text_size_input
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+font_family = font.family_monospace
+
+should_process() =>
+    slack = math.floor((chart.right_visible_bar_time - chart.left_visible_bar_time) * 0.2) 
+
+    not na(session_time) 
+      and (session_time >= chart.left_visible_bar_time - slack 
+      and session_time <= chart.right_visible_bar_time + slack)
+      and (timeframe.isintraday or timeframe.isdaily or ((timeframe_input == TF_MONTHLY or timeframe_input == TF_FIXED) and timeframe.isweekly))
+      and (timeframe_input == TF_FIXED ? time >= time_range_from_input and time <= time_range_till_input : true)
+
+session_input_times() =>
+    times = str.split(session_range_input, "-")
+
+    hour_minute = array.get(times, 0)
+    h1 = str.tonumber(str.substring(hour_minute, 0, 2))
+    m1 = str.tonumber(str.substring(hour_minute, 2, 4))
+
+    hour_minute := array.get(times, 1)
+    h2 = str.tonumber(str.substring(hour_minute, 0, 2))
+    m2 = str.tonumber(str.substring(hour_minute, 2, 4))
+    
+    [h1, m1, h2, m2]
+
+is_first_bar_of_session() =>
+    switch timeframe_input
+        TF_DAILY =>
+            [h1, m1, h2, m2] = session_input_times()
+            open_ts = timestamp(tz, year(time), month(time), dayofmonth(time), int(h1), int(m1), 0)
+            time >= open_ts and time[1] < open_ts 
+        TF_WEEKLY   =>
+            weekofyear[1] != weekofyear
+        TF_MONTHLY  =>
+            month[1] != month
+        TF_FIXED =>
+            time >= time_range_from_input and time[1] < time_range_from_input
+
+spaces(n, char) =>
+    spaces = ""
+    if n > 0
+        for i = 1 to n
+            spaces := spaces + char
+    spaces
+
+openning_char() =>
+    array.get(tpo_chars, 0)
+
+get_label_at(index) =>
+    array.get(tpo_labels, index)
+
+get_text_at(index) =>
+    label.get_text(get_label_at(index))
+
+create_tpo_label(x, y) =>
+    label.new(x, y, color = color.new(color.white, 100), textcolor = default_tpo_color_input, 
+              size = font_size, style = label.style_label_left, xloc = xloc.bar_index, 
+              text_font_family = font_family)
+
+append_char(x, char) =>
+    label.set_text(array.get(tpo_labels, x), text = get_text_at(x) + char) 
+
+tpo_count() =>
+    count = 0
+    for tpo in tpo_labels
+        count += str.length(str.replace_all(label.get_text(tpo), " ", ""))
+    count
+
+highlight_value_area() =>
+    value_area_idx = array.new_int()
+    vp_poc_id = array.get(globals, G_VP_POC_LABEL_IDX)
+    id = value_area_based_on_vp_input and not na(vp_poc_id) ? vp_poc_id : array.get(globals, G_POC_LABEL_IDX)
+
+    if id >= 0
+        label.set_textcolor(get_label_at(id), value_area_color_input) 
+    value_area = id >= 0 ? str.length(str.replace_all(get_text_at(id), " ", "")) : 0
+
+    size = array.size(tpo_labels)
+    total_tpos = tpo_count()
+
+    i = id
+    j = id
+
+    while j > 0 or i < size - 1
+        i += 1
+        j -= 1
+        v1 = 0
+        v2 = 0
+
+        if i < size
+            v1 := str.length(str.replace_all(get_text_at(i), " ", ""))
+        if j >= 0
+            v2 := str.length(str.replace_all(get_text_at(j), " ", ""))
+
+        if v1 == v2 and v1 != 0
+            value_area := value_area + v1
+            label.set_textcolor(get_label_at(i), value_area_color_input) 
+            value_area := value_area + v2
+            label.set_textcolor(get_label_at(j), value_area_color_input)
+        else if v1 > v2
+            value_area := value_area + v1
+            label.set_textcolor(get_label_at(i), value_area_color_input)
+            j += 1
+        else if v2 > v1
+            value_area := value_area + v2
+            label.set_textcolor(get_label_at(j), value_area_color_input)
+            i -=1
+
+        if value_area >= total_tpos * (va_percent_input / 100.0)
+            break
+
+    if show_extension_lines_input and i >= 0 and j >= 0 and i < size
+        va1 = label.get_y(get_label_at(i))
+        va2 = label.get_y(get_label_at(j))
+        ln1 = line.new(first_bar_index, va1, first_bar_index + 1, va1, color = vah_ext_color_input, width = 1, extend = extend.right)
+        ln2 = line.new(first_bar_index, va2, first_bar_index + 1, va2, color = val_ext_color_input, width = 1, extend = extend.right)
+        array.push(ext_cache, ln1)
+        array.push(ext_cache, ln2)
+
+highlight_single_prints() =>
+    for tpo in tpo_labels
+        if str.length(str.replace_all(label.get_text(tpo), " ", "")) == 1
+            label.set_textcolor(tpo, single_print_color_input)
+
+calculate_poc() =>
+    size = array.size(tpo_labels)
+
+    if size > 0
+        mid = math.floor(size / 2)
+        poc = array.get(tpo_labels, mid)
+
+        i = mid
+        j = mid
+        idx = mid
+
+        poc_length = 0
+
+        while j >= 0 or i < size - 1
+            if i < size
+                len1 = str.length(str.replace_all(get_text_at(i), " ", ""))
+                if len1 > poc_length
+                    poc_length := len1
+                    poc := get_label_at(i)
+                    idx := i
+
+            if j >= 0
+                len2 = str.length(str.replace_all(get_text_at(j), " ", ""))
+                if len2 > poc_length
+                    poc_length := len2
+                    poc := get_label_at(j)
+                    idx := j
+            i += 1
+            j -= 1
+
+        array.set(globals, G_POC_LABEL_IDX,  idx)
+
+highlight_poc() =>
+    vp_poc = na(array.get(globals, G_VP_POC_LABEL_IDX)) ? na : get_label_at(array.get(globals, G_VP_POC_LABEL_IDX))
+    poc = get_label_at(array.get(globals, G_POC_LABEL_IDX))
+
+    if na(vp_poc)
+        label.set_textcolor(poc, poc_color_input)
+
+    if show_vp_based_poc_input and not na(vp_poc)
+        label.set_textcolor(vp_poc, vp_poc_color_input)
+    
+    if array.get(globals, G_VP_POC_LABEL_IDX) != array.get(globals, G_POC_LABEL_IDX)
+        if not na(vp_poc)
+            if str.length(str.replace_all(label.get_text(vp_poc), " ", "")) != str.length(str.replace_all(label.get_text(poc), " ", ""))
+                label.set_textcolor(poc, poc_color_input)
+
+    if show_extension_lines_input
+        y = label.get_y(na(vp_poc) ? poc : vp_poc )
+        ln = line.new(first_bar_index, y, first_bar_index + 1, y, color = poc_ext_color_input, width = 1, extend = extend.right)
+        array.push(ext_cache, ln)
+
+reset() =>
+    array.clear(vp_labels)
+    array.clear(tpo_labels)
+    array.clear(tpo_oc_labels)
+    array.clear(lines)
+    array.clear(ext_cache)
+    array.clear(tpo_highs)
+    array.clear(tpo_lows)
+    array.clear(vp_volumes)
+    array.clear(vp_prices)
+
+    array.set(globals, G_POC_LABEL_IDX, na)
+    array.set(globals, G_VP_POC_LABEL_IDX, na)
+    array.set(prices, P_SESSION_OPEN, 0.0)
+    array.set(prices, P_SESSION_CLOSE, 0.0)
+    array.set(prices, P_IB_HIGH, 0.0)
+    array.set(prices, P_IB_LOW, 0.0)
+
+delete_objects() =>
+    while array.size(vp_labels) > 0
+        label.delete(array.shift(vp_labels))
+    while array.size(tpo_labels) > 0
+        label.delete(array.shift(tpo_labels))
+    while array.size(tpo_oc_labels) > 0
+        label.delete(array.shift(tpo_oc_labels))
+    while array.size(lines) > 0
+        line.delete(array.shift(lines))
+    while array.size(ext_cache) > 0
+        line.delete(array.shift(ext_cache))
+
+draw_ib_lines() =>
+    if ib_periods_input > 0
+        array.push(lines, 
+          line.new(first_bar_index, min, first_bar_index, array.get(prices, P_IB_LOW), xloc.bar_index, extend.none, ib_background_color_input, line.style_solid, ib_width_input))
+        array.push(lines, 
+          line.new(first_bar_index, array.get(prices, P_IB_LOW), first_bar_index, array.get(prices, P_IB_HIGH), xloc.bar_index, extend.none, ib_highlight_color_input, line.style_solid, ib_width_input))
+        array.push(lines, 
+          line.new(first_bar_index, array.get(prices, P_IB_HIGH), first_bar_index, max, xloc.bar_index, extend.none, ib_background_color_input, line.style_solid, ib_width_input))
+
+quantized_price(price, tick_multiplier) =>
+    step = tick_multiplier * syminfo.mintick
+    price - price % step
+
+create_price_levels() =>
+    step = ticks_input * syminfo.mintick
+
+    for y = min to max by step
+        array.push(tpo_labels, create_tpo_label(first_bar_index, y))
+
+get_label_index_at_price(price) =>
+    if price <= min
+        0
+    else
+        levels = array.size(tpo_labels)
+        step = ticks_input * syminfo.mintick
+        math.min(levels - 1, math.round((price - min) / step))
+
+highlight_current_price_level_tpos() =>
+    if not na(session_time) and (not barstate.isconfirmed or barstate.isrealtime)
+        label.set_textcolor(get_label_at(get_label_index_at_price(close)), close_color_input)
+
+highlight_open_tpo() =>
+    if array.size(tpo_labels) > 0 and tpo_characters_input == TPO_AZ
+        idx = get_label_index_at_price(array.get(prices, P_SESSION_OPEN))
+
+        if idx >= 0
+            lbl = get_label_at(idx)
+
+            if array.size(tpo_oc_labels) == 0
+                copy = label.copy(lbl)
+                array.push(tpo_oc_labels, copy)
+                length = str.length(label.get_text(copy))
+                open_char = str.substring(label.get_text(copy), 0, 1)
+                label.set_text(lbl, " " + str.substring(label.get_text(lbl), 1, length))
+                label.set_text(copy, open_char)
+                label.set_text_font_family(copy, font_family)
+                label.set_textcolor(copy, open_color_input)
+
+highlight_close_tpo() =>
+    if TPO_AZ == tpo_characters_input and array.size(last_label) > 0
+        lbl = array.shift(last_label)
+        copy = label.copy(lbl)
+        length = str.length(label.get_text(copy))
+
+        if length > 0
+            close_char = str.substring(label.get_text(copy), length - 1, length)
+            label.set_text(lbl, str.substring(label.get_text(lbl), 0, length - 1))
+            label.set_text(copy, spaces(length - 1, " ") + close_char + "◂")
+            label.set_text_font_family(copy, font_family)
+            label.set_textcolor(copy, close_color_input)
+
+highlight_midpoint() =>
+    if show_extension_lines_input
+        y = switch midpoint_algo_input
+            MP_TPOS =>
+                mid = math.floor(tpo_count() / 2)
+                count = 0
+                y = 0.0
+
+                for tpo in tpo_labels
+                    count += str.length(str.replace_all(label.get_text(tpo), " ", ""))
+                    if count >= mid
+                        y := label.get_y(tpo)
+                        break
+                y
+            MP_HL =>
+                max - (max - min) / 2
+
+        ln = line.new(first_bar_index, y, first_bar_index + 1, y, color = mid_color_input, width = 1, extend = extend.right, style = line.style_dotted)
+        array.push(ext_cache, ln)
+
+is_upper(string string) =>
+	u = str.upper(string)
+	u != str.lower(string) and string == u
+
+render_tpos() =>
+    mark_open = switch mark_period_opens_input
+        "No"          => na
+        "Swap case"   => 1
+        "Use '0'"     => 2
+
+    for i = 0 to array.size(tpo_highs) - 1
+        min_idx = get_label_index_at_price(array.get(tpo_lows, i))
+        max_idx = get_label_index_at_price(array.get(tpo_highs, i))
+
+        open_idx = mark_open and tpo_characters_input == TPO_AZ and i < array.size(opens) ? get_label_index_at_price(array.get(opens, i)) : na
+
+        for j = min_idx to max_idx
+            char = array.get(tpo_chars, i % (array.size(tpo_chars)))
+            if mark_open and tpo_characters_input == TPO_AZ and open_idx and j == open_idx
+                if mark_open == 1
+                    char := is_upper(char) ? str.lower(char) : str.upper(char)
+                if mark_open == 2
+                    char := "0"
+            append_char(j, char)
+
+        if split_profile_input and tpo_characters_input == TPO_AZ
+            for tpo in tpo_labels
+                len = str.length(label.get_text(tpo))
+
+                if len < i + 1
+                    add_spaces = " "
+                    label.set_text(tpo, label.get_text(tpo) + add_spaces)
+
+calculate_volume_profile_based_poc() =>
+    if show_vp_based_poc_input and array.size(lower_tf_highs) > 0 and array.size(lower_tf_lows) > 0 and array.size(lower_tf_volumes) > 0
+        for i = 0 to array.size(lower_tf_highs) - 1
+            _min = quantized_price(array.get(lower_tf_lows, i), ticks_input)
+            _max = quantized_price(array.get(lower_tf_highs, i),  ticks_input)
+
+            vol = array.get(lower_tf_volumes, i) / (1 + (_max - _min) / (ticks_input * syminfo.mintick))
+
+            for price = _min to _max by ticks_input * syminfo.mintick
+
+                index = array.indexof(vp_prices, price)
+                if index == -1
+                    array.push(vp_prices, price)
+                    array.push(vp_volumes, vol)
+                else
+                    array.set(vp_volumes, index, array.get(vp_volumes, index) + vol)
+
+        poc = array.get(vp_prices, array.indexof(vp_volumes, array.max(vp_volumes)))
+        array.set(globals, G_VP_POC_LABEL_IDX,  get_label_index_at_price(poc))
+    else
+        // all or nothing, please...
+        array.set(globals, G_VP_POC_LABEL_IDX, na)
+        array.clear(vp_prices)
+        array.clear(vp_volumes)
+
+should_download_lower_tf() =>
+    should_process() and show_vp_based_poc_input and timeframe.in_seconds() > 60
+
+lower_tf() =>
+    if timeframe.in_seconds() < 60 * 30
+        "1"
+    else if timeframe.in_seconds() >= 60 * 30 and timeframe.in_seconds() < 60 * 60
+        "3"
+    else if timeframe.in_seconds() == 60 * 60
+        "10"
+    else
+        "60"
+
+highlight_vwap() =>
+    if show_session_vwap_input and not na(session_vwap)
+        vwap_index = get_label_index_at_price(session_vwap)
+        lbl = get_label_at(vwap_index)
+        label.set_textcolor(lbl, session_vwap_color_input)
+
+volume_color(price, ratio) =>
+    percent = int(100*ratio)
+
+    if percent <= 8
+        color.new(single_print_color_input, 0)
+    else
+        color.new(value_area_color_input, math.max(0, 80 - percent))
+
+render_volume_numbers() =>
+    if timeframe_input == TF_FIXED and render_volumes_input and array.size(vp_prices) > 0 
+        for i = 0 to array.size(vp_prices) - 1
+            price = array.get(vp_prices, i)
+            vol = array.get(vp_volumes, i)
+
+            lbl = label.new(first_bar_index, price, str.tostring(math.round(vol)), color = color.new(color.white, 100), textcolor = volume_color(price, vol/array.max(vp_volumes)), 
+              size = font_size, style = label.style_label_right, xloc = xloc.bar_index, 
+              text_font_family = font_family)
+
+            array.push(vp_labels, lbl)
+
+cache_last_label() =>
+    if tpo_characters_input == TPO_AZ
+        array.clear(last_label)
+        array.push(last_label, get_label_at(get_label_index_at_price(close)))
+
+bg_color() =>
+    if timeframe_input == TF_FIXED and time >= time_range_from_input and time <= time_range_till_input
+        fixed_range_bg_color_input
+    else
+        color(na)
+
+handle_extension_lines() =>
+    if array.size(extensions) > 0 and session_time
+        for i = 0 to array.size(extensions) - 1
+            if i >= array.size(extensions)
+                continue
+
+            ln = array.get(extensions, i)
+            y = line.get_y1(ln)
+
+            if y >= min and y <= max
+                line.set_x2(ln, first_bar_index)
+                line.set_extend(ln, extend.none)
+                array.remove(extensions, i)
+
+lower_tf_highs   := should_download_lower_tf() ? request.security_lower_tf(syminfo.ticker, lower_tf(), high) : array.new_float()
+lower_tf_lows    := should_download_lower_tf() ? request.security_lower_tf(syminfo.ticker, lower_tf(), low) : array.new_float()
+lower_tf_volumes := should_download_lower_tf() ? request.security_lower_tf(syminfo.ticker, lower_tf(), volume) : array.new_float()
+
+if timeframe.in_seconds() <= 60
+    lower_tf_highs   := array.from(high)
+    lower_tf_lows    := array.from(low)
+    lower_tf_volumes := array.from(volume)
+
+if array.size(tpo_chars) == 0
+    chars = switch tpo_characters_input
+        TPO_SQUARE       => TPO_SQUARE
+        TPO_CIRCLE       => TPO_CIRCLE
+        TPO_AZ           => TPO_CHARS
+    tpo_chars := str.split(chars, "")
+
+if is_first_bar_of_session() and should_process()
+    if show_extension_lines_input
+        while array.size(ext_cache) > 0
+            array.push(extensions, array.shift(ext_cache))
+
+    reset()
+
+    max := high
+    min := low
+
+    first_bar_index := bar_index
+
+    array.set(opens, 0, open)
+
+    array.set(prices, P_SESSION_OPEN, open)
+    array.set(prices, P_SESSION_CLOSE, close)
+    array.push(tpo_highs, high)
+    array.push(tpo_lows, low)
+    
+    if ib_periods_input > 0
+        array.set(prices, P_IB_LOW, low)
+        array.set(prices, P_IB_HIGH, high)
+
+    create_price_levels()
+    render_tpos()
+    
+    array.push(lines, line.new(first_bar_index - price_marker_length_input, array.get(prices, P_SESSION_OPEN), first_bar_index, array.get(prices, P_SESSION_OPEN), xloc.bar_index, extend.none, color = open_color_input, width = price_marker_width_input))
+    array.push(lines, line.new(first_bar_index, array.get(prices, P_SESSION_CLOSE), first_bar_index + price_marker_length_input, array.get(prices, P_SESSION_CLOSE), xloc.bar_index, extend.none, color = close_color_input, width = price_marker_width_input))
+    
+    draw_ib_lines()
+    calculate_poc()
+    calculate_volume_profile_based_poc()
+    highlight_open_tpo()
+    highlight_current_price_level_tpos()
+
+if not is_first_bar_of_session() and should_process() and bar_index - first_bar_index < MAX_BARS_BACK
+    delete_objects()
+
+    max := math.max(high, max)
+    min := math.min(low, min)
+
+    if bar_index - first_bar_index < array.size(opens) 
+        array.set(opens, bar_index - first_bar_index, open)
+   
+    create_price_levels() 
+
+    if bar_index - first_bar_index < ib_periods_input
+        ib_l = math.min(array.get(prices, P_IB_LOW), low)
+        ib_h = math.max(array.get(prices, P_IB_HIGH), high)
+        array.set(prices, P_IB_HIGH, ib_h)
+        array.set(prices, P_IB_LOW, ib_l)
+
+    array.set(prices, P_SESSION_CLOSE, close)
+    array.push(tpo_highs, high)
+    array.push(tpo_lows, low)
+
+    render_tpos()
+
+    array.push(lines, line.new(first_bar_index - price_marker_length_input, array.get(prices, P_SESSION_OPEN), first_bar_index, array.get(prices, P_SESSION_OPEN), xloc.bar_index, extend.none, color = open_color_input, width = price_marker_width_input))
+    array.push(lines, line.new(first_bar_index, array.get(prices, P_SESSION_CLOSE), first_bar_index + price_marker_length_input, array.get(prices, P_SESSION_CLOSE), xloc.bar_index, extend.none, color = close_color_input, width = price_marker_width_input))
+
+    draw_ib_lines()
+    calculate_poc()
+    calculate_volume_profile_based_poc()
+    highlight_value_area()
+    highlight_midpoint()
+    highlight_vwap()
+    highlight_poc()
+    highlight_single_prints()
+    highlight_current_price_level_tpos()
+    highlight_open_tpo()
+    render_volume_numbers()
+    cache_last_label()
+
+    if show_extension_lines_input
+        ln_high = line.new(first_bar_index, max, first_bar_index + 1, max, color = high_color_input, width = 1, extend = extend.right, style = line.style_dotted)
+        ln_low = line.new(first_bar_index, min, first_bar_index + 1, min, color = low_color_input, width = 1, extend = extend.right, style = line.style_dotted)
+        array.push(ext_cache, ln_high)
+        array.push(ext_cache, ln_low)
+
+handle_extension_lines()
+bgcolor(bg_color())
+
+if is_first_bar_of_session() or not should_process()
+    highlight_close_tpo()
