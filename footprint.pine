@@ -1,0 +1,346 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © RunStrat
+
+//@version=5
+indicator("RS: Footprint", "RS: FP", max_labels_count = 500, max_lines_count = 50, max_bars_back=0, overlay = true)
+
+mode_input                = input.string("Delta", "Mode", ["Bid vs Ask", "Delta"])
+ticks_input               = input.int(1, "Ticks per step", minval = 1)
+color_up_1_input          = input.color(defval = color.new(#8d8d8d, 0), title = "Up 1", group = "Colors") 
+color_up_2_input          = input.color(defval = color.new(#6b8bb6, 0), title = "Up 2", group = "Colors")
+color_up_3_input          = input.color(defval = color.new(#5289d3, 0), title = "Up 3", group = "Colors")
+color_up_4_input          = input.color(defval = color.new(#2e7de6, 0), title = "Up 4", group = "Colors")
+color_up_5_input          = input.color(defval = color.new(#0077ff, 0), title = "Up 5", group = "Colors")
+color_dn_1_input          = input.color(defval = color.new(#8d8d8d, 0), title = "Down 1", group = "Colors")
+color_dn_2_input          = input.color(defval = color.new(#b87b6c, 0), title = "Down 2", group = "Colors")
+color_dn_3_input          = input.color(defval = color.new(#d46d53, 0), title = "Down 3", group = "Colors")
+color_dn_4_input          = input.color(defval = color.new(#ec5732, 0), title = "Down 4", group = "Colors")
+color_dn_5_input          = input.color(defval = color.new(#fe3300, 0), title = "Down 5", group = "Colors")
+color_v_1_input           = input.color(defval = color.new(#636363, 0), title = "Volume 1", group = "Colors")
+color_v_2_input           = input.color(defval = color.new(#858585, 0), title = "Volume 2", group = "Colors")
+color_v_3_input           = input.color(defval = color.new(#a3a3a3, 0), title = "Volume 3", group = "Colors")
+color_v_4_input           = input.color(defval = color.new(#c9c9c9, 0), title = "Volume 4", group = "Colors")
+color_v_5_input           = input.color(defval = color.new(#ffffff, 0), title = "Volume 5", group = "Colors")
+color_wick_input          = input.color(defval = color.new(#666666, 0), title = "Candle wicks", group = "Colors")
+
+PRICE_MAP_SIZE = 100000
+BID_VS_ASK = 1
+DELTA = 2
+LABEL_POOL_SIZE = 500
+LINE_POOL_SIZE = 50
+
+var label[] label_pool = array.new_label()
+var line[] line_pool = array.new_line()
+var label[] labels_up = array.new_label()
+var label[] labels_dn = array.new_label()
+
+varip int[] prices_map = array.new_int(PRICE_MAP_SIZE)
+varip float[] prices = array.new_float()
+varip float[] sorted_prices = array.new_float()
+varip float[] up_vol = array.new_float()
+varip float[] dn_vol = array.new_float()
+varip float prev_close = 0.0
+varip float prev_volume = 0.0
+varip bool at_ask = true
+varip max_delta = 0.0
+varip max_ask = 0.0
+varip max_bid = 0.0
+varip max_ask_bid = 0.0
+varip max_tot_vol = 0.0
+varip up = 0.0
+varip dn = 0.0
+
+mode = switch mode_input
+    "Bid vs Ask" => BID_VS_ASK
+    "Delta" => DELTA
+
+if array.size(label_pool) == 0
+    for i = 1 to LABEL_POOL_SIZE
+        lbl = label.new(
+           bar_index, 
+           close,
+           xloc = xloc.bar_index,
+           yloc = yloc.price,
+           color = color(na), 
+           textcolor = color(na),
+           text_font_family = font.family_monospace)
+        array.push(label_pool, lbl)
+
+if array.size(line_pool) == 0
+    for i = 1 to LINE_POOL_SIZE
+        ln = line.new(
+           bar_index, 
+           close, 
+           bar_index,
+           close, 
+           xloc.bar_index, 
+           extend.none,
+           color = color(na))
+        array.push(line_pool, ln)
+
+step = ticks_input * syminfo.mintick
+
+get_label() =>
+    lbl = array.shift(label_pool)
+    array.push(label_pool, lbl)
+    label.set_x(lbl, bar_index)
+    label.set_yloc(lbl, yloc.price)
+    label.set_text_font_family(lbl, font.family_monospace)
+    label.set_size(lbl, size.normal)
+    label.set_textcolor(lbl, color(na))
+    label.set_color(lbl, color(na))
+    lbl
+
+get_line() =>
+    ln = array.shift(line_pool)
+    array.push(line_pool, ln)
+    line.set_x1(ln, bar_index)
+    line.set_x2(ln, bar_index)
+    ln
+
+price_map_index(price)  =>
+    int(math.round(price, 2) * 100 % PRICE_MAP_SIZE)
+
+quantized_price(price) =>
+    price - price % step
+
+vol_color(up, ratio) =>
+    if up 
+        if ratio >= 0.8
+            color_up_5_input
+        else if ratio >= 0.5
+            color_up_4_input
+        else if ratio >= 0.3
+            color_up_3_input
+        else if ratio >= 0.1
+            color_up_2_input
+        else
+            color_up_1_input
+    else
+        if ratio >= 0.8
+            color_dn_5_input
+        else if ratio >= 0.5
+            color_dn_4_input
+        else if ratio >= 0.3
+            color_dn_3_input
+        else if ratio >= 0.1
+            color_dn_2_input
+        else
+            color_dn_1_input
+
+diag_vol_color(up, ratio) =>
+    if up 
+        if ratio >= 4
+            color_up_5_input
+        else if ratio >= 3
+            color_up_4_input
+        else if ratio >= 2
+            color_up_3_input
+        else if ratio >= 1.5
+            color_up_2_input
+        else
+            color_up_1_input
+    else
+        if ratio >= 4
+            color_dn_5_input
+        else if ratio >= 3
+            color_dn_4_input
+        else if ratio >= 2
+            color_dn_3_input
+        else if ratio >= 1.5
+            color_dn_2_input
+        else
+            color_dn_1_input
+
+total_vol_color(ratio) =>
+    if ratio >= 1
+        color_v_5_input
+    else if ratio >= 0.9
+        color_v_4_input
+    else if ratio >= 0.7
+        color_v_3_input
+    else if ratio >= 0.3
+        color_v_2_input
+    else
+        color_v_1_input
+
+render_delta_labels(price, d_vol, u_vol, max_delta, max_vol) =>
+    color_delta = vol_color(u_vol - d_vol >= 0, math.abs(u_vol - d_vol) / max_delta)
+    color_volume = total_vol_color((u_vol + d_vol) / max_vol)
+ 
+    lbl1 = get_label()
+    lbl2 = get_label()
+
+    label.set_text(lbl1, str.tostring(u_vol - d_vol))
+    label.set_y(lbl1, price)
+    label.set_textcolor(lbl1, color_delta)
+    label.set_style(lbl1, label.style_label_right)
+
+    label.set_text(lbl2, str.tostring(u_vol + d_vol))
+    label.set_y(lbl2, price)
+    label.set_textcolor(lbl2, color_volume)
+    label.set_style(lbl2, label.style_label_left)
+
+render_bid_vs_ask_labels(price, d_vol, u_vol) =>
+    lbl1 = get_label()
+    lbl2 = get_label()
+
+    label.set_text(lbl1, str.tostring(d_vol))
+    label.set_y(lbl1, price)
+    label.set_textcolor(lbl1, color_dn_1_input)
+    label.set_style(lbl1, label.style_label_right)
+
+    label.set_text(lbl2, str.tostring(u_vol))
+    label.set_y(lbl2, price)
+    label.set_textcolor(lbl2, color_up_1_input)
+    label.set_style(lbl2, label.style_label_left)
+
+    array.push(labels_dn, lbl1)
+    array.push(labels_up, lbl2)
+
+render_candle() =>
+    body_color = close >= open ? color_up_5_input: color_dn_5_input
+    ln1 = get_line()
+    ln2 = get_line()
+    ln3 = get_line()
+
+    line.set_y1(ln1, open)
+    line.set_y2(ln1, open == close ? close + (syminfo.mintick / 5) : close)
+    line.set_width(ln1, 3)
+    line.set_color(ln1, body_color)
+
+    line.set_y1(ln2, high)
+    line.set_y2(ln2, open > close ? open : close)
+    line.set_width(ln2, 1)
+    line.set_color(ln2, color_wick_input)
+    
+    line.set_y1(ln3, low)
+    line.set_y2(ln3, close < open ? close : open)
+    line.set_width(ln3, 1)
+    line.set_color(ln3, color_wick_input)
+
+get_price_index(price) =>
+    array.size(prices_map) > 0 ? array.get(prices_map, price_map_index(price)) : na
+
+set_price_index(price, index) =>
+    if array.size(prices_map) > 0 
+        array.set(prices_map, price_map_index(price), index)
+
+if barstate.isrealtime
+    render_candle()
+    
+    if barstate.isnew
+        up := 0
+        dn := 0
+        prev_volume := 0
+        max_delta := 0.0
+        max_ask := 0.0
+        max_bid := 0.0
+        max_ask_bid := 0.0
+        max_tot_vol := 0.0
+        prices_map := array.new_int(PRICE_MAP_SIZE)
+
+    if not barstate.isnew and prev_volume == 0
+        prev_volume := volume
+
+    diff = volume - prev_volume
+    prev_volume := volume
+    prev_close := prev_close != 0.0 ? prev_close : open
+
+    u_diff = 0.0
+    d_diff = 0.0
+
+    if close > prev_close
+        u_diff += diff
+        at_ask := true
+    if close < prev_close
+        d_diff += diff
+        at_ask := false
+    if close == prev_close
+        if at_ask
+            u_diff += diff
+        else
+            d_diff += diff
+
+    prev_close := close
+
+    up += u_diff
+    dn += d_diff
+
+    q_close = quantized_price(close)
+    price_index = get_price_index(q_close)
+
+    if na(price_index)
+        array.push(prices, q_close)
+        array.push(up_vol, u_diff)
+        array.push(dn_vol, d_diff)
+        price_index := array.size(prices) - 1
+        set_price_index(q_close, price_index)
+
+        if mode == BID_VS_ASK
+            array.push(sorted_prices, q_close)
+            array.sort(sorted_prices, order.descending)
+    else
+        array.set(up_vol, price_index, array.get(up_vol, price_index) + u_diff)
+        array.set(dn_vol, price_index, array.get(dn_vol, price_index) + d_diff)
+
+    u_vol = array.get(up_vol, price_index)
+    d_vol = array.get(dn_vol, price_index)
+
+    switch mode
+        BID_VS_ASK =>
+            max_ask := math.max(max_ask, u_vol)
+            max_bid := math.max(max_bid, d_vol)
+            label_idx = -1
+            
+            for price in sorted_prices
+                idx = array.get(prices_map, price_map_index(price))
+                y = array.get(prices, idx)
+                u_vol := array.get(up_vol, idx)
+                d_vol := array.get(dn_vol, idx)
+                render_bid_vs_ask_labels(y, d_vol, u_vol)
+
+                if label_idx != -1
+                    diag_ask_lbl = array.get(labels_up, label_idx)
+                    diag_bid_lbl = array.get(labels_dn, label_idx + 1)
+                    diag_ask = nz(str.tonumber(label.get_text(diag_ask_lbl))) + 0.0001
+                    diag_bid = nz(str.tonumber(label.get_text(diag_bid_lbl))) + 0.0001
+                    if diag_ask / max_ask >= 0.3
+                        label.set_textcolor(diag_ask_lbl, diag_vol_color(true, diag_ask / diag_bid))
+                    if diag_bid / max_bid >= 0.3
+                        label.set_textcolor(diag_bid_lbl, diag_vol_color(false, diag_bid / diag_ask))
+
+                label_idx += 1
+        DELTA =>
+            max_delta := math.max(max_delta, math.abs(u_vol - d_vol))
+            max_tot_vol := math.max(max_tot_vol, u_vol + d_vol)
+
+            for idx = 0 to array.size(prices) - 1
+                y = array.get(prices, idx)
+                u_vol := array.get(up_vol, idx)
+                d_vol := array.get(dn_vol, idx)
+                render_delta_labels(y, d_vol, u_vol, max_delta, max_tot_vol)
+
+    delta =  up - dn
+
+    up_percent = nz(math.round(100 * up / (up+dn)))
+    dn_percent = nz(math.round(100 * dn / (up+dn)))
+
+    lbl_info = get_label()
+    label.set_text(lbl_info, str.format("Δ: {0}\nV: ", delta) + str.tostring((up+dn), format.volume) + str.format("\n↓{0}% : ↑{1}%", dn_percent, up_percent))
+    label.set_y(lbl_info, high)
+    label.set_yloc(lbl_info, yloc.abovebar)
+    label.set_color(lbl_info, color.new(vol_color(delta > 0, math.abs(delta/(up+dn))), 90))
+    label.set_textcolor(lbl_info, vol_color(delta > 0, math.ceil((delta > 0 ? up_percent : dn_percent) - 50) / 50))
+    label.set_style(lbl_info, label.style_label_center)
+    label.set_text_font_family(lbl_info, font.family_default)
+
+if barstate.isconfirmed
+    array.clear(prices)
+    array.clear(up_vol)
+    array.clear(dn_vol)
+
+    if mode == BID_VS_ASK
+        array.clear(labels_up)
+        array.clear(labels_dn)
+        array.clear(sorted_prices)
